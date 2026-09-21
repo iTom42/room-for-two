@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#FBFAF8">
+<title>Room for Two</title>
+<style>
+  :root{
+    --paper:#FBFAF8; --paper-2:#FFFFFF;
+    --ink:#14140F; --ink-2:#56554E; --ink-3:#74726A;
+    --rule:#E4E2DA; --rule-soft:#EFEDE6;
+    --red:#E01F00;           /* Ferrari red — the one accent */
+    --red-wash:#FDEEEB;
+    --shadow:0 1px 2px rgba(20,20,15,.04), 0 8px 28px rgba(20,20,15,.06);
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font:400 18px/1.55 var(--sans); -webkit-font-smoothing:antialiased;
+    display:flex; align-items:center; justify-content:center;
+    padding:24px; text-align:center;
+  }
+  main{width:100%; max-width:520px}
+
+  h1{
+    font-size:clamp(26px,5vw,34px); font-weight:800; letter-spacing:-.02em;
+    margin:0 0 6px;
+  }
+  .sub{color:var(--ink-3); font-size:clamp(15px,2.6vw,17px); margin:0 0 40px}
+
+  button{
+    font:600 18px/1 var(--sans); color:var(--paper-2); background:var(--ink);
+    border:0; border-radius:12px; padding:18px 28px; cursor:pointer;
+    transition:transform .12s ease, opacity .12s ease;
+  }
+  button:hover{transform:translateY(-1px)}
+  button:active{transform:translateY(0)}
+  button.ghost{background:transparent; color:var(--ink-2); border:1px solid var(--rule); font-weight:500}
+
+  .or{margin:26px 0 18px; color:var(--ink-3); font-size:14px; letter-spacing:.14em; text-transform:uppercase}
+
+  .joinrow{display:flex; gap:10px; justify-content:center}
+  input{
+    font:700 22px/1 var(--sans); letter-spacing:.22em; text-align:center; text-transform:uppercase;
+    width:180px; padding:16px 10px; border:1px solid var(--rule); border-radius:12px;
+    background:var(--paper-2); color:var(--ink);
+  }
+  input:focus{outline:2px solid var(--red); outline-offset:2px; border-color:transparent}
+
+  /* the room code, made to be read out loud over a video call */
+  .code{
+    font-size:clamp(54px,14vw,86px); font-weight:800; letter-spacing:.16em;
+    line-height:1; margin:14px 0 10px; color:var(--red);
+  }
+  .codelabel{font-size:14px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3)}
+  .waiting{color:var(--ink-2); margin-top:28px}
+  .dots::after{content:''; animation:dots 1.4s steps(4,end) infinite}
+  @keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+
+  .status{
+    font-size:clamp(20px,4vw,26px); font-weight:700; min-height:1.5em; margin:0 0 22px;
+  }
+  .status.you{color:var(--red)}
+  .status.them{color:var(--ink-3); font-weight:500}
+
+  .board{
+    display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
+    width:min(86vw,400px); aspect-ratio:1; margin:0 auto 26px;
+  }
+  .cell{
+    background:var(--paper-2); border:1px solid var(--rule); border-radius:14px;
+    box-shadow:var(--shadow); cursor:pointer; padding:0;
+    font-size:clamp(40px,11vw,64px); font-weight:800; line-height:1;
+    color:var(--ink); display:grid; place-items:center;
+    transition:background .12s ease, transform .12s ease;
+  }
+  .cell:hover:not(:disabled){transform:none; background:var(--rule-soft)}
+  .cell:disabled{cursor:default}
+  .cell.o{color:var(--red)}
+  .cell .mark{animation:pop .18s ease-out}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+
+  .foot{margin-top:8px; color:var(--ink-3); font-size:14px}
+  .foot b{color:var(--ink-2); font-weight:600; letter-spacing:.14em}
+  .err{color:var(--red); min-height:1.4em; margin-top:14px; font-size:15px}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+<main>
+
+  <section id="lobby">
+    <h1>Room for Two</h1>
+    <p class="sub">One game, two devices, one shared board.</p>
+    <button id="create">Start a game</button>
+    <p class="or">or join one</p>
+    <form class="joinrow" id="joinform">
+      <input id="codeinput" maxlength="4" placeholder="CODE" autocomplete="off"
+             autocapitalize="characters" spellcheck="false" aria-label="Room code">
+      <button class="ghost" type="submit">Join</button>
+    </form>
+    <p class="err" id="err"></p>
+  </section>
+
+  <section id="wait" hidden>
+    <p class="codelabel">Your room code</p>
+    <p class="code" id="code">····</p>
+    <p class="sub" id="joinhint"></p>
+    <p class="waiting">Waiting for the second player<span class="dots"></span></p>
+  </section>
+
+  <section id="game" hidden>
+    <p class="status" id="status"></p>
+    <div class="board" id="board"></div>
+    <button id="again" hidden>Play again</button>
+    <p class="foot">Room <b id="footcode"></b> · you are <b id="footmark"></b></p>
+  </section>
+
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${proto}//${location.host}`);
+
+let me = null, over = false;
+
+function show(which){
+  for (const id of ['lobby','wait','game']) $(id).hidden = (id !== which);
+}
+
+ws.addEventListener('open', () => {
+  const pre = new URLSearchParams(location.search).get('room');
+  if (pre) ws.send(JSON.stringify({ type:'join', code: pre }));
+});
+
+ws.addEventListener('close', () => {
+  $('status').textContent = 'Connection lost. Reload the page.';
+  $('status').className = 'status';
+});
+
+ws.addEventListener('message', (e) => {
+  const msg = JSON.parse(e.data);
+
+  if (msg.type === 'error'){
+    $('err').textContent = msg.reason === 'full'
+      ? 'That room already has two players.'
+      : 'No room with that code.';
+    show('lobby');
+    return;
+  }
+
+  if (msg.type === 'state'){
+    me = msg.you;
+    over = msg.over;
+    $('footcode').textContent = msg.code;
+    $('footmark').textContent = msg.you;
+
+    if (!msg.ready && !msg.paused){
+      $('code').textContent = msg.code;
+      const url = `${location.origin}/?room=${msg.code}`;
+      $('joinhint').textContent = `Open ${url} on the other device, or type the code there.`;
+      show('wait');
+      return;
+    }
+
+    if (msg.paused){
+      // the other device dropped — the board is kept, they rejoin with the code
+      show('game');
+      $('status').textContent = `Waiting for the other player — code ${msg.code}`;
+      $('status').className = 'status them';
+      $('again').hidden = true;
+      render(msg.board, true);
+      return;
+    }
+
+    show('game');
+    if (msg.over){
+      $('status').textContent = msg.winner === null
+        ? 'A draw.'
+        : (msg.winner === me ? 'You win.' : 'You lose.');
+      $('status').className = 'status' + (msg.winner === me ? ' you' : '');
+      $('again').hidden = false;
+    } else {
+      const mine = msg.turn === me;
+      $('status').textContent = mine ? 'Your turn' : 'Their turn';
+      $('status').className = 'status ' + (mine ? 'you' : 'them');
+      $('again').hidden = true;
+    }
+    render(msg.board, msg.over || msg.turn !== me);
+  }
+});
+
+function render(board, locked){
+  const el = $('board');
+  if (el.children.length !== 9){
+    el.innerHTML = '';
+    for (let i = 0; i < 9; i++){
+      const b = document.createElement('button');
+      b.className = 'cell';
+      b.addEventListener('click', () => ws.send(JSON.stringify({ type:'move', cell:i })));
+      el.appendChild(b);
+    }
+  }
+  [...el.children].forEach((b, i) => {
+    const v = board[i];
+    if (b.dataset.v !== String(v)){
+      b.dataset.v = String(v);
+      b.innerHTML = v ? `<span class="mark">${v}</span>` : '';
+    }
+    b.classList.toggle('o', v === 'O');
+    b.disabled = locked || !!v;
+  });
+}
+
+$('create').addEventListener('click', () => ws.send(JSON.stringify({ type:'create' })));
+$('again').addEventListener('click', () => ws.send(JSON.stringify({ type:'again' })));
+$('joinform').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('err').textContent = '';
+  const code = $('codeinput').value.trim().toUpperCase();
+  if (code.length === 4) ws.send(JSON.stringify({ type:'join', code }));
+});
+</script>
+</body>
+</html>

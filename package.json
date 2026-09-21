@@ -1,0 +1,17 @@
+{
+  "name": "room-for-two",
+  "version": "1.0.0",
+  "description": "Two players, one room code, one shared state. The demo that needs a server.",
+  "private": false,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
