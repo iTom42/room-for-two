@@ -56,6 +56,15 @@
     line-height:1; margin:14px 0 10px; color:var(--red);
   }
   .codelabel{font-size:14px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3)}
+
+  /* the same link as a QR, so the other phone scans instead of typing */
+  .qr{
+    width:min(58vw,236px); margin:20px auto 16px; padding:14px;
+    background:var(--paper-2); border:1px solid var(--rule); border-radius:16px;
+    box-shadow:var(--shadow); color:var(--ink);
+  }
+  .qr svg{display:block; width:100%; height:auto}
+
   .waiting{color:var(--ink-2); margin-top:28px}
   .dots::after{content:''; animation:dots 1.4s steps(4,end) infinite}
   @keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
@@ -108,6 +117,7 @@
   <section id="wait" hidden>
     <p class="codelabel">Your room code</p>
     <p class="code" id="code">····</p>
+    <div class="qr" id="qr" hidden></div>
     <p class="sub" id="joinhint"></p>
     <p class="waiting">Waiting for the second player<span class="dots"></span></p>
   </section>
@@ -125,7 +135,7 @@ const $ = (id) => document.getElementById(id);
 const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${proto}//${location.host}`);
 
-let me = null, over = false;
+let me = null, over = false, shownQr = null;
 
 function show(which){
   for (const id of ['lobby','wait','game']) $(id).hidden = (id !== which);
@@ -161,7 +171,8 @@ ws.addEventListener('message', (e) => {
     if (!msg.ready && !msg.paused){
       $('code').textContent = msg.code;
       const url = `${location.origin}/?room=${msg.code}`;
-      $('joinhint').textContent = `Open ${url} on the other device, or type the code there.`;
+      if (url !== shownQr){ showQr(url); shownQr = url; }
+      $('joinhint').textContent = `Scan it with the other device, or type the code at ${location.host}`;
       show('wait');
       return;
     }
@@ -213,6 +224,206 @@ function render(board, locked){
     b.classList.toggle('o', v === 'O');
     b.disabled = locked || !!v;
   });
+}
+
+// ---- QR ------------------------------------------------------------------
+// Enough of the spec to put a short URL on screen: byte mode, error
+// correction level M, versions 1-6 (up to 106 characters). No library and no
+// CDN on purpose — the join code has to work on a laptop with no wifi.
+function qrMatrix(text){
+  const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+  for (let i = 0, x = 1; i < 255; i++){
+    EXP[i] = x; LOG[x] = i;
+    x <<= 1; if (x & 256) x ^= 0x11d;
+  }
+  for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  const mul = (a, b) => (a && b) ? EXP[LOG[a] + LOG[b]] : 0;
+
+  // version -> [data codewords per block, ec codewords per block, blocks].
+  // Level M only, and only the versions whose blocks are all the same size.
+  const SPEC = { 1:[16,10,1], 2:[28,16,1], 3:[44,26,1], 4:[32,18,2], 5:[43,24,2], 6:[27,16,4] };
+  const ALIGN = { 2:18, 3:22, 4:26, 5:30, 6:34 };  // the single alignment centre
+
+  const bytes = new TextEncoder().encode(text);
+  let version = 0;
+  for (let v = 1; v <= 6; v++){
+    const [dc, , nb] = SPEC[v];
+    if (dc * nb * 8 >= 12 + bytes.length * 8){ version = v; break; }
+  }
+  if (!version) throw new Error('too long for a version 6 QR code');
+
+  const [dcPerBlock, ecPerBlock, blocks] = SPEC[version];
+  const size = 17 + 4 * version;
+
+  // data codewords: mode, length, payload, terminator, padding
+  const bits = [];
+  const push = (val, n) => { for (let i = n - 1; i >= 0; i--) bits.push((val >> i) & 1); };
+  push(0b0100, 4);
+  push(bytes.length, 8);
+  for (const b of bytes) push(b, 8);
+  const capacity = dcPerBlock * blocks * 8;
+  for (let i = 0; i < 4 && bits.length < capacity; i++) bits.push(0);
+  while (bits.length % 8) bits.push(0);
+  const data = [];
+  for (let i = 0; i < bits.length; i += 8)
+    data.push(bits.slice(i, i + 8).reduce((a, b) => (a << 1) | b, 0));
+  for (let pad = 0; data.length < dcPerBlock * blocks; pad++)
+    data.push(pad % 2 ? 0x11 : 0xec);
+
+  // Reed-Solomon over GF(256)
+  let gen = [1];
+  for (let i = 0; i < ecPerBlock; i++){
+    const next = new Array(gen.length + 1).fill(0);
+    for (let j = 0; j < gen.length; j++){
+      next[j] ^= gen[j];
+      next[j + 1] ^= mul(gen[j], EXP[i]);
+    }
+    gen = next;
+  }
+  const dataBlocks = [], ecBlocks = [];
+  for (let b = 0; b < blocks; b++){
+    const block = data.slice(b * dcPerBlock, (b + 1) * dcPerBlock);
+    const rem = new Array(ecPerBlock).fill(0);
+    for (const d of block){
+      const factor = d ^ rem[0];
+      rem.shift(); rem.push(0);
+      for (let i = 0; i < ecPerBlock; i++) rem[i] ^= mul(gen[i + 1], factor);
+    }
+    dataBlocks.push(block); ecBlocks.push(rem);
+  }
+  const final = [];
+  for (let i = 0; i < dcPerBlock; i++) for (const b of dataBlocks) final.push(b[i]);
+  for (let i = 0; i < ecPerBlock; i++) for (const b of ecBlocks) final.push(b[i]);
+
+  // the fixed patterns
+  const m = Array.from({length:size}, () => new Array(size).fill(0));
+  const fixed = Array.from({length:size}, () => new Array(size).fill(false));
+  const set = (r, c, v) => { m[r][c] = v ? 1 : 0; fixed[r][c] = true; };
+
+  const finder = (r0, c0) => {
+    for (let r = -1; r <= 7; r++) for (let c = -1; c <= 7; c++){
+      const rr = r0 + r, cc = c0 + c;
+      if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
+      const inner = r >= 0 && r <= 6 && c >= 0 && c <= 6;
+      const ring = inner && (r === 0 || r === 6 || c === 0 || c === 6);
+      const core = inner && r >= 2 && r <= 4 && c >= 2 && c <= 4;
+      set(rr, cc, ring || core);
+    }
+  };
+  finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+  for (let i = 8; i < size - 8; i++){ set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+  if (version >= 2){
+    const a = ALIGN[version];
+    for (let r = -2; r <= 2; r++) for (let c = -2; c <= 2; c++)
+      set(a + r, a + c, Math.max(Math.abs(r), Math.abs(c)) !== 1);
+  }
+  for (let i = 0; i <= 8; i++){
+    if (!fixed[i][8]) set(i, 8, 0);
+    if (!fixed[8][i]) set(8, i, 0);
+  }
+  for (let i = 0; i < 8; i++) if (!fixed[8][size - 1 - i]) set(8, size - 1 - i, 0);
+  for (let i = 0; i < 7; i++) if (!fixed[size - 1 - i][8]) set(size - 1 - i, 8, 0);
+  set(size - 8, 8, 1);  // the always-dark module
+
+  // data, zigzagging up and down from the bottom right
+  let bit = 0;
+  const totalBits = final.length * 8;
+  for (let right = size - 1; right >= 1; right -= 2){
+    if (right === 6) right = 5;  // skip the vertical timing column
+    for (let vert = 0; vert < size; vert++){
+      for (let j = 0; j < 2; j++){
+        const c = right - j;
+        const upward = ((right + 1) & 2) === 0;
+        const r = upward ? size - 1 - vert : vert;
+        if (fixed[r][c] || bit >= totalBits) continue;
+        m[r][c] = (final[bit >>> 3] >> (7 - (bit & 7))) & 1;
+        bit++;
+      }
+    }
+  }
+
+  // eight masks, lowest penalty wins
+  const MASKS = [
+    (r,c) => (r + c) % 2 === 0,
+    (r) => r % 2 === 0,
+    (r,c) => c % 3 === 0,
+    (r,c) => (r + c) % 3 === 0,
+    (r,c) => (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0,
+    (r,c) => ((r * c) % 2) + ((r * c) % 3) === 0,
+    (r,c) => (((r * c) % 2) + ((r * c) % 3)) % 2 === 0,
+    (r,c) => (((r + c) % 2) + ((r * c) % 3)) % 2 === 0,
+  ];
+  const RUN = [1,0,1,1,1,0,1,0,0,0,0];
+  function penalty(g){
+    let score = 0;
+    const lines = [];
+    for (let r = 0; r < size; r++) lines.push(g[r].slice());
+    for (let c = 0; c < size; c++) lines.push(g.map((row) => row[c]));
+    for (const line of lines){
+      let run = 1;
+      for (let i = 1; i < size; i++){
+        if (line[i] === line[i - 1]) run++;
+        else { if (run >= 5) score += 3 + (run - 5); run = 1; }
+      }
+      if (run >= 5) score += 3 + (run - 5);
+      const p = [0,0,0,0, ...line, 0,0,0,0];
+      for (let i = 0; i + 11 <= p.length; i++){
+        let fwd = true, rev = true;
+        for (let k = 0; k < 11; k++){
+          if (p[i + k] !== RUN[k]) fwd = false;
+          if (p[i + k] !== RUN[10 - k]) rev = false;
+        }
+        if (fwd || rev) score += 40;
+      }
+    }
+    for (let r = 0; r < size - 1; r++) for (let c = 0; c < size - 1; c++){
+      const v = g[r][c];
+      if (v === g[r][c + 1] && v === g[r + 1][c] && v === g[r + 1][c + 1]) score += 3;
+    }
+    let dark = 0;
+    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) dark += g[r][c];
+    score += Math.floor(Math.abs((dark * 100) / (size * size) - 50) / 5) * 10;
+    return score;
+  }
+  function formatBits(mask){
+    const v = (0b00 << 3) | mask;          // 0b00 is level M
+    let rem = v;
+    for (let i = 0; i < 10; i++) rem = (rem << 1) ^ (((rem >> 9) & 1) * 0x537);
+    return (((v << 10) | rem) ^ 0x5412) & 0x7fff;
+  }
+
+  let best = null, bestScore = Infinity;
+  for (let mask = 0; mask < 8; mask++){
+    const g = m.map((row) => row.slice());
+    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++)
+      if (!fixed[r][c] && MASKS[mask](r, c)) g[r][c] ^= 1;
+    const fb = formatBits(mask), at = (i) => (fb >> i) & 1;
+    for (let i = 0; i <= 5; i++) g[i][8] = at(i);
+    g[7][8] = at(6); g[8][8] = at(7); g[8][7] = at(8);
+    for (let i = 9; i < 15; i++) g[8][14 - i] = at(i);
+    for (let i = 0; i < 8; i++) g[8][size - 1 - i] = at(i);
+    for (let i = 8; i < 15; i++) g[size - 15 + i][8] = at(i);
+    g[size - 8][8] = 1;
+    const s = penalty(g);
+    if (s < bestScore){ bestScore = s; best = g; }
+  }
+  return best;
+}
+
+function showQr(url){
+  const box = $('qr');
+  try {
+    const m = qrMatrix(url), n = m.length, q = 4;  // q: the quiet zone scanners need
+    let d = '';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++)
+      if (m[r][c]) d += `M${c + q} ${r + q}h1v1h-1z`;
+    box.innerHTML = `<svg viewBox="0 0 ${n + q * 2} ${n + q * 2}" shape-rendering="crispEdges" `
+      + `role="img" aria-label="Scan to join room ${url.slice(-4)}">`
+      + `<path fill="currentColor" d="${d}"/></svg>`;
+    box.hidden = false;
+  } catch {
+    box.hidden = true;   // link too long to encode — the code above still works
+  }
 }
 
 $('create').addEventListener('click', () => ws.send(JSON.stringify({ type:'create' })));

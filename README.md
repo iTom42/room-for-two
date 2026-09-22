@@ -1,8 +1,8 @@
 # Room for Two
 
 Tic-tac-toe for two devices. One person starts a game and gets a four-letter
-room code, the other types the code on their phone, and both see the same
-board.
+room code and a QR of the join link, the other scans it — or types the code —
+and both see the same board.
 
 It exists to make one point: **this is where a single HTML file stops being
 enough.**
@@ -20,7 +20,9 @@ npm start
 ```
 
 Open http://localhost:3000, click **Start a game**, then open the same address
-in a second window or on your phone and type the code.
+in a second window and type the code. From a phone on the same network, scan
+the QR — but point the phone at your machine's LAN address rather than
+`localhost`, which on a phone means the phone.
 
 ## Run it on the internet
 
@@ -35,7 +37,11 @@ There is no build step and no database. It needs a Node process and a port.
 | File | What it does |
 | --- | --- |
 | `server.js` | Serves the page and holds the rooms. All of the shared state is the `rooms` map. |
-| `public/index.html` | The whole client: markup, style and script in one file. |
+| `public/index.html` | The whole client: markup, style and script in one file, including a small QR encoder. |
+
+The QR is drawn in the browser from about 150 lines of the spec — byte mode,
+error correction M, versions 1 to 6. No library and no CDN, because the join
+screen is the one screen that has to work when the venue wifi does not.
 
 Rooms live in memory. Restart the process and the games are gone — which is
 fine for what this is, and is itself worth a sentence on stage.
