@@ -1,17 +1,27 @@
 {
   "name": "room-for-two",
   "version": "1.0.0",
-  "description": "Two players, one room code, one shared state. The demo that needs a server.",
   "private": false,
+  "description": "Two players, one room code, one shared state. The demo that needs a server.",
+  "homepage": "https://github.com/iTom42/room-for-two#readme",
+  "bugs": {
+    "url": "https://github.com/iTom42/room-for-two/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iTom42/room-for-two.git"
+  },
+  "license": "ISC",
+  "author": "",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
