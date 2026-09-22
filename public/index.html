@@ -76,9 +76,21 @@
   .status.them{color:var(--ink-3); font-weight:500}
 
   .board{
+    position:relative;
     display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
     width:min(86vw,400px); aspect-ratio:1; margin:0 auto 26px;
   }
+  /* the strike through the three winning squares */
+  .board .winline{
+    position:absolute; inset:0; width:100%; height:100%;
+    pointer-events:none; overflow:visible;
+  }
+  .board .winline line{
+    stroke:var(--red); stroke-width:.09; stroke-linecap:round;
+    stroke-dasharray:4; stroke-dashoffset:4;
+    animation:strike .32s ease-out forwards;
+  }
+  @keyframes strike{to{stroke-dashoffset:0}}
   .cell{
     background:var(--paper-2); border:1px solid var(--rule); border-radius:14px;
     box-shadow:var(--shadow); cursor:pointer; padding:0;
@@ -183,7 +195,7 @@ ws.addEventListener('message', (e) => {
       $('status').textContent = `Waiting for the other player — code ${msg.code}`;
       $('status').className = 'status them';
       $('again').hidden = true;
-      render(msg.board, true);
+      render(msg.board, true, null);
       return;
     }
 
@@ -200,13 +212,14 @@ ws.addEventListener('message', (e) => {
       $('status').className = 'status ' + (mine ? 'you' : 'them');
       $('again').hidden = true;
     }
-    render(msg.board, msg.over || msg.turn !== me);
+    render(msg.board, msg.over || msg.turn !== me, msg.line);
   }
 });
 
-function render(board, locked){
+function render(board, locked, line){
   const el = $('board');
-  if (el.children.length !== 9){
+  const cells = el.querySelectorAll('.cell');
+  if (cells.length !== 9){
     el.innerHTML = '';
     for (let i = 0; i < 9; i++){
       const b = document.createElement('button');
@@ -215,7 +228,7 @@ function render(board, locked){
       el.appendChild(b);
     }
   }
-  [...el.children].forEach((b, i) => {
+  [...el.querySelectorAll('.cell')].forEach((b, i) => {
     const v = board[i];
     if (b.dataset.v !== String(v)){
       b.dataset.v = String(v);
@@ -224,6 +237,37 @@ function render(board, locked){
     b.classList.toggle('o', v === 'O');
     b.disabled = locked || !!v;
   });
+  drawWinLine(el, line);
+}
+
+// A line through the winning three, in the accent red. The board is a 3x3
+// grid, so cell i sits at column i%3, row (i/3) — centres land on half steps.
+function drawWinLine(el, line){
+  const existing = el.querySelector('.winline');
+  const key = line ? line.join('') : '';
+  if (existing && existing.dataset.line === key) return;
+  if (existing) existing.remove();
+  if (!line) return;
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'winline');
+  svg.setAttribute('viewBox', '0 0 3 3');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.dataset.line = key;
+
+  const centre = i => [i % 3 + 0.5, Math.floor(i / 3) + 0.5];
+  const [x1, y1] = centre(line[0]);
+  const [x2, y2] = centre(line[2]);
+  // stop just short of the outer edges so the stroke stays on the board
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy), t = 0.16 / len;
+  const seg = document.createElementNS(NS, 'line');
+  seg.setAttribute('x1', x1 + dx * t);
+  seg.setAttribute('y1', y1 + dy * t);
+  seg.setAttribute('x2', x2 - dx * t);
+  seg.setAttribute('y2', y2 - dy * t);
+  svg.appendChild(seg);
+  el.appendChild(svg);
 }
 
 // ---- QR ------------------------------------------------------------------
